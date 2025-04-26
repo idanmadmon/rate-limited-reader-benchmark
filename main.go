@@ -26,7 +26,7 @@ func main() {
 
 	runTest(RateLimitBasicFunctionalityTest, readerFactory)
 	runTest(MaxReadOverTimeSyntheticTest, readerFactory)
-	runTest(TestReaderBehavior3, readerFactory)
+	runTest(LargeReadFromNetTest, readerFactory)
 }
 
 func monitorLoop(ctx context.Context) {

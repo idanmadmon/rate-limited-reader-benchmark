@@ -57,10 +57,11 @@ func MaxReadOverTimeSyntheticTest(readerFactory ReaderFactory) {
 	var totalBytes int64
 
 	reader := infiniteReader{}
+	ratelimitedReader := readerFactory(reader, 0) // no limit
 	deadline := time.Now().Add(durationInSeconds * time.Second)
 
 	for time.Now().Before(deadline) {
-		n, err := reader.Read(buffer)
+		n, err := ratelimitedReader.Read(buffer)
 		if n > 0 {
 			totalBytes += int64(n)
 		}
@@ -83,6 +84,35 @@ func (infiniteReader) Read(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func TestReaderBehavior3(readerFactory ReaderFactory) {
-	fmt.Println("Running TestReaderBehavior3")
+func (infiniteReader) Close() error {
+	return nil
+}
+
+func LargeReadFromNetTest(readerFactory ReaderFactory) {
+	dataSize := 1 * 1024 * 1024 * 1024 // 1 GB of data
+	var elapsed time.Duration
+
+	readFunc := func(connReader io.ReadCloser) (int, error) {
+		ratelimitedReader := readerFactory(connReader, 0) // no limit
+		start := time.Now()
+		buffer := make([]byte, dataSize)
+		n, err := ratelimitedReader.Read(buffer)
+		if err != nil && err != io.EOF {
+			fmt.Printf("Unexpected error while reading: %v\n", err)
+		}
+
+		if n != dataSize {
+			fmt.Printf("Read incomplete data, read: %d expected: %d\n", n, dataSize)
+		}
+
+		elapsed = time.Since(start)
+		return n, err
+	}
+
+	err := receiveOnceTCPServer(dataSize, readFunc)
+	if err != nil {
+		fmt.Printf("Unexpected error from server: %v\n", err)
+	}
+
+	fmt.Printf("LargeReadFromNetTest Took %v\n", elapsed)
 }
