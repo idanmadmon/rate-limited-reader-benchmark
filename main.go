@@ -21,9 +21,10 @@ func main() {
 	go monitorLoop(ctx)
 	time.Sleep(500 * time.Millisecond)
 
+	// readerFactory := IdanMadmonRateLimitReaderFactory
 	readerFactory := NoLimitReaderFactory
 
-	runTest(TestReaderBehavior1, readerFactory)
+	runTest(RateLimitBasicFunctionalityTest, readerFactory)
 	runTest(TestReaderBehavior2, readerFactory)
 	runTest(TestReaderBehavior3, readerFactory)
 }

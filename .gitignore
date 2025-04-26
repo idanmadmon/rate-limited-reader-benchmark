@@ -2,6 +2,7 @@
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
 #
 # Binaries for programs and plugins
+rate-limited-reader-benchmark
 *.exe
 *.exe~
 *.dll
