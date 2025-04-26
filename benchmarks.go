@@ -36,7 +36,7 @@ func RateLimitBasicFunctionalityTest(readerFactory ReaderFactory) {
 		fmt.Printf("Unexpected error from server: %v\n", err)
 	}
 
-	fmt.Printf("Took %v\n", elapsed)
+	fmt.Printf("RateLimitBasicFunctionalityTest Took %v\n", elapsed)
 	minTimeInSeconds := partsAmount
 	maxTimeInSeconds := partsAmount + 1
 	minTime := time.Duration(minTimeInSeconds) * time.Second
@@ -48,8 +48,39 @@ func RateLimitBasicFunctionalityTest(readerFactory ReaderFactory) {
 	}
 }
 
-func TestReaderBehavior2(readerFactory ReaderFactory) {
-	fmt.Println("Running TestReaderBehavior2")
+func MaxReadOverTimeSyntheticTest(readerFactory ReaderFactory) {
+	const durationInSeconds = 10
+	const bufferSize = 32 * 1024 // 32KB buffer
+	fmt.Printf("Duration set: %d seconds\n", durationInSeconds)
+
+	buffer := make([]byte, bufferSize)
+	var totalBytes int64
+
+	reader := infiniteReader{}
+	deadline := time.Now().Add(durationInSeconds * time.Second)
+
+	for time.Now().Before(deadline) {
+		n, err := reader.Read(buffer)
+		if n > 0 {
+			totalBytes += int64(n)
+		}
+		if err != nil {
+			fmt.Printf("Read error: %v\n", err)
+			break
+		}
+	}
+
+	mb := float64(totalBytes) / 1024.0 / 1024.0
+	fmt.Printf("MaxReadOverTimeSyntheticTest: Read %.3f MB in 10 seconds\n", mb)
+}
+
+type infiniteReader struct{}
+
+func (infiniteReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 'A'
+	}
+	return len(p), nil
 }
 
 func TestReaderBehavior3(readerFactory ReaderFactory) {
