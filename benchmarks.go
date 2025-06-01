@@ -3,63 +3,55 @@ package main
 import (
 	"fmt"
 	"io"
+	"strings"
 	"time"
 )
 
 type BenchmarkTest func(ReaderFactory)
 
-func RateLimitBasicFunctionalityTest(readerFactory ReaderFactory) {
-	dataSize := 102400 // 100 KB of data
-	partsAmount := 4
-	limit := int64(dataSize / partsAmount) // dataSize/partsAmount bytes per second
-	var elapsed time.Duration
+func RateLimitingSyntheticTest(readerFactory ReaderFactory) {
+	const dataSize = 100 * 1024 * 1024 // 100MB
+	const bufferSize = 32 * 1024       // 32KB classic io.Copy
+	const limit = dataSize / 4         // should take 4 seconds
+	var total int
 
-	readFunc := func(connReader io.ReadCloser) (int, error) {
-		ratelimitedReader := readerFactory(connReader, limit)
-		start := time.Now()
-		buffer := make([]byte, dataSize)
-		n, err := ratelimitedReader.Read(buffer)
-		if err != nil && err != io.EOF {
-			fmt.Printf("Unexpected error while reading: %v\n", err)
+	reader := &syntheticReader{size: dataSize}
+	limitedReader := readerFactory(reader, bufferSize, limit)
+	buffer := make([]byte, bufferSize)
+
+	start := time.Now()
+	for {
+		n, err := limitedReader.Read(buffer)
+		total += n
+		if err != nil {
+			if err != io.EOF {
+				fmt.Printf("Error: %v\n", err)
+			}
+			break
 		}
+	}
+	elapsed := time.Since(start)
 
-		if n != dataSize {
-			fmt.Printf("Read incomplete data, read: %d expected: %d\n", n, dataSize)
-		}
-
-		elapsed = time.Since(start)
-		return n, err
+	if total != dataSize {
+		fmt.Printf("Read incomplete data, read: %d expected: %d\n", total, dataSize)
 	}
 
-	err := receiveOnceTCPServer(dataSize, readFunc)
-	if err != nil {
-		fmt.Printf("Unexpected error from server: %v\n", err)
-	}
-
-	fmt.Printf("RateLimitBasicFunctionalityTest Took %v\n", elapsed)
-	minTimeInSeconds := partsAmount
-	maxTimeInSeconds := partsAmount + 1
-	minTime := time.Duration(minTimeInSeconds) * time.Second
-	maxTime := time.Duration(maxTimeInSeconds) * time.Second
-	if elapsed.Abs().Round(time.Second) < minTime { // round to second - has a deviation of up to half a second
-		fmt.Printf("Read completed too quickly, elapsed time: %v < min time: %v\n", elapsed, minTime)
-	} else if elapsed.Abs().Round(time.Second) > maxTime { // round to second - has a deviation of up to half a second
-		fmt.Printf("Read completed too slow, elapsed time: %v > max time: %v\n", elapsed, maxTime)
-	}
+	fmt.Printf("RateLimitingSyntheticTest Took %v\n", elapsed)
 }
 
 func MaxReadOverTimeSyntheticTest(readerFactory ReaderFactory) {
 	const durationInSeconds = 10
-	const bufferSize = 32 * 1024 // 32KB buffer
+	const bufferSize = 32 * 1024 // 32KB classic io.Copy
+	const limit = 0              //bufferSize * 10000 // large limit
 	fmt.Printf("Duration set: %d seconds\n", durationInSeconds)
 
 	buffer := make([]byte, bufferSize)
 	var totalBytes int64
 
-	reader := infiniteReader{}
-	ratelimitedReader := readerFactory(reader, 0) // no limit
-	deadline := time.Now().Add(durationInSeconds * time.Second)
+	reader := &syntheticReader{}
+	ratelimitedReader := readerFactory(reader, bufferSize, limit)
 
+	deadline := time.Now().Add(durationInSeconds * time.Second)
 	for time.Now().Before(deadline) {
 		n, err := ratelimitedReader.Read(buffer)
 		if n > 0 {
@@ -75,44 +67,239 @@ func MaxReadOverTimeSyntheticTest(readerFactory ReaderFactory) {
 	fmt.Printf("MaxReadOverTimeSyntheticTest: Read %.3f MB in 10 seconds\n", mb)
 }
 
-type infiniteReader struct{}
-
-func (infiniteReader) Read(p []byte) (int, error) {
-	for i := range p {
-		p[i] = 'A'
-	}
-	return len(p), nil
-}
-
-func (infiniteReader) Close() error {
-	return nil
-}
-
-func LargeReadFromNetTest(readerFactory ReaderFactory) {
-	dataSize := 1 * 1024 * 1024 * 1024 // 1 GB of data
+func RateLimitingRealWorldLocalTest(readerFactory ReaderFactory) {
+	const dataSize = 100 * 1024 * 1024 // 100MB
+	const bufferSize = 32 * 1024       // 32KB classic io.Copy
+	const limit = dataSize / 4         // should take 4 seconds
 	var elapsed time.Duration
 
-	readFunc := func(connReader io.ReadCloser) (int, error) {
-		ratelimitedReader := readerFactory(connReader, 0) // no limit
-		start := time.Now()
-		buffer := make([]byte, dataSize)
-		n, err := ratelimitedReader.Read(buffer)
-		if err != nil && err != io.EOF {
-			fmt.Printf("Unexpected error while reading: %v\n", err)
-		}
+	rf := func(connReader io.ReadCloser) (int, error) {
+		ratelimitedReader := readerFactory(connReader, bufferSize, limit)
 
-		if n != dataSize {
-			fmt.Printf("Read incomplete data, read: %d expected: %d\n", n, dataSize)
+		var total, n int
+		var err error
+		buffer := make([]byte, bufferSize)
+		start := time.Now()
+		for {
+			n, err = ratelimitedReader.Read(buffer)
+			total += n
+			if err != nil {
+				if err != io.EOF {
+					fmt.Printf("Unexpected error while reading: %v\n", err)
+				}
+				break
+			}
 		}
 
 		elapsed = time.Since(start)
-		return n, err
+		if total != dataSize {
+			fmt.Printf("Read incomplete data, read: %d expected: %d\n", n, dataSize)
+		}
+
+		return total, err
 	}
 
-	err := receiveOnceTCPServer(dataSize, readFunc)
-	if err != nil {
+	wf := func(connWriter io.Writer) (int, error) {
+		message := strings.Repeat("A", dataSize)
+		return connWriter.Write([]byte(message))
+	}
+
+	go func() {
+		// give the server a sec to start
+		time.Sleep(1 * time.Second)
+
+		n, err := sendTCPMessage(wf)
+		if err != nil {
+			fmt.Println("Failed to send message:", err)
+		}
+		if n != dataSize {
+			fmt.Printf("Failed to send message: sent insufficient size=%d expectedSize=%d\n", n, dataSize)
+		}
+	}()
+
+	n, err := receiveOnceTCPServer(rf)
+	if err != nil && err != io.EOF {
 		fmt.Printf("Unexpected error from server: %v\n", err)
 	}
+	if n != dataSize {
+		fmt.Printf("Failed to get message: got insufficient size=%d expectedSize=%d\n", n, dataSize)
+	}
 
-	fmt.Printf("LargeReadFromNetTest Took %v\n", elapsed)
+	fmt.Printf("RateLimitingRealWorldLocalTest Took %v\n", elapsed)
+}
+
+func RateLimitingRealWorldServerTest(readerFactory ReaderFactory) {
+	const dataSize = 100 * 1024 * 1024 // 100MB
+	const bufferSize = 32 * 1024       // 32KB classic io.Copy
+	const limit = dataSize / 4         // should take 4 seconds
+	var elapsed time.Duration
+
+	rf := func(connReader io.ReadCloser) (int, error) {
+		ratelimitedReader := readerFactory(connReader, bufferSize, limit)
+
+		var total, n int
+		var err error
+		buffer := make([]byte, bufferSize)
+		start := time.Now()
+		for {
+			n, err = ratelimitedReader.Read(buffer)
+			total += n
+			if err != nil {
+				if err != io.EOF {
+					fmt.Printf("Unexpected error while reading: %v\n", err)
+				}
+				break
+			}
+		}
+
+		elapsed = time.Since(start)
+		if total != dataSize {
+			fmt.Printf("Read incomplete data, read: %d expected: %d\n", n, dataSize)
+		}
+
+		return total, err
+	}
+
+	n, err := receiveOnceTCPServer(rf)
+	if err != nil && err != io.EOF {
+		fmt.Printf("Unexpected error from server: %v\n", err)
+	}
+	if n != dataSize {
+		fmt.Printf("Failed to get message: got insufficient size=%d expectedSize=%d\n", n, dataSize)
+	}
+
+	fmt.Printf("RateLimitingRealWorldServerTest Took %v\n", elapsed)
+}
+
+func SpikeRecoveryRealWorldLocalTest(readerFactory ReaderFactory) {
+	const dataSize = 100 * 1024 * 1024 // 100MB
+	const bufferSize = 32 * 1024       // 32KB classic io.Copy
+	const limit = dataSize / 8         // should take 8 seconds
+	var elapsed time.Duration
+
+	rf := func(connReader io.ReadCloser) (int, error) {
+		ratelimitedReader := readerFactory(connReader, bufferSize, limit)
+
+		var total, n int
+		var err error
+		buffer := make([]byte, bufferSize)
+		start := time.Now()
+		for {
+			n, err = ratelimitedReader.Read(buffer)
+			total += n
+			if err != nil {
+				if err != io.EOF {
+					fmt.Printf("Unexpected error while reading: %v\n", err)
+				}
+				break
+			}
+		}
+
+		elapsed = time.Since(start)
+		if total != dataSize {
+			fmt.Printf("Read incomplete data, read: %d expected: %d\n", n, dataSize)
+		}
+
+		return total, err
+	}
+
+	wf := func(connWriter io.Writer) (int, error) {
+		chunkSize := dataSize / 8
+		var total int
+		var n int
+		var err error
+
+		for i := 0; i < 1; i++ {
+			n, err = connWriter.Write([]byte(strings.Repeat("A", chunkSize)))
+			total += n
+			if err != nil {
+				return total, nil
+			}
+			time.Sleep(1 * time.Second)
+		}
+
+		n, err = connWriter.Write([]byte(strings.Repeat("A", chunkSize*5)))
+		total += n
+		if err != nil {
+			return total, nil
+		}
+		time.Sleep(1 * time.Second)
+
+		for i := 0; i < 2; i++ {
+			n, err = connWriter.Write([]byte(strings.Repeat("A", chunkSize)))
+			total += n
+			if err != nil {
+				return total, nil
+			}
+			time.Sleep(1 * time.Second)
+		}
+
+		return total, err
+	}
+
+	go func() {
+		// give the server a sec to start
+		time.Sleep(1 * time.Second)
+
+		n, err := sendTCPMessage(wf)
+		if err != nil {
+			fmt.Println("Failed to send message:", err)
+		}
+		if n != dataSize {
+			fmt.Printf("Failed to send message: sent insufficient size=%d expectedSize=%d\n", n, dataSize)
+		}
+	}()
+
+	n, err := receiveOnceTCPServer(rf)
+	if err != nil && err != io.EOF {
+		fmt.Printf("Unexpected error from server: %v\n", err)
+	}
+	if n != dataSize {
+		fmt.Printf("Failed to get message: got insufficient size=%d expectedSize=%d\n", n, dataSize)
+	}
+
+	fmt.Printf("SpikeRecoveryRealWorldLocalTest Took %v\n", elapsed)
+}
+
+func SpikeRecoveryRealWorldServerTest(readerFactory ReaderFactory) {
+	const dataSize = 100 * 1024 * 1024 // 100MB
+	const bufferSize = 32 * 1024       // 32KB classic io.Copy
+	const limit = dataSize / 8         // should take 8 seconds
+	var elapsed time.Duration
+
+	rf := func(connReader io.ReadCloser) (int, error) {
+		ratelimitedReader := readerFactory(connReader, bufferSize, limit)
+
+		var total, n int
+		var err error
+		buffer := make([]byte, bufferSize)
+		start := time.Now()
+		for {
+			n, err = ratelimitedReader.Read(buffer)
+			total += n
+			if err != nil {
+				if err != io.EOF {
+					fmt.Printf("Unexpected error while reading: %v\n", err)
+				}
+				break
+			}
+		}
+
+		elapsed = time.Since(start)
+		if total != dataSize {
+			fmt.Printf("Read incomplete data, read: %d expected: %d\n", n, dataSize)
+		}
+
+		return total, err
+	}
+
+	n, err := receiveOnceTCPServer(rf)
+	if err != nil && err != io.EOF {
+		fmt.Printf("Unexpected error from server: %v\n", err)
+	}
+	if n != dataSize {
+		fmt.Printf("Failed to get message: got insufficient size=%d expectedSize=%d\n", n, dataSize)
+	}
+
+	fmt.Printf("SpikeRecoveryRealWorldLocalTest Took %v\n", elapsed)
 }

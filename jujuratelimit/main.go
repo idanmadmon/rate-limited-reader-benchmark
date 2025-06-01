@@ -13,7 +13,8 @@ func main() {
 	const dataSize = 32 * 1024
 	reader := bytes.NewBuffer(make([]byte, dataSize))
 
-	limit := 8 * 1024
+	// limit := dataSize / 4
+	limit := dataSize / 5
 	limiter := ratelimit.NewBucketWithRate(float64(limit), int64(limit))
 
 	var total int

@@ -4,64 +4,46 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strings"
-	"time"
 )
 
 var (
-	internalAddress = "localhost:1238"
+	serverAddress = "localhost:1238"
 )
 
-func receiveOnceTCPServer(size int, readFunc func(io.ReadCloser) (int, error)) error {
-	ln, err := net.Listen("tcp", internalAddress)
+type readFunc func(io.ReadCloser) (int, error)
+type writeFunc func(io.Writer) (int, error)
+
+func receiveOnceTCPServer(rf readFunc) (int, error) {
+	ln, err := net.Listen("tcp", serverAddress)
 	if err != nil {
 		fmt.Println("Server failed to start:", err)
-		return err
+		return 0, err
 	}
 	defer ln.Close()
-	fmt.Println("Server listening on", internalAddress)
-
-	// give the server a sec to start
-	time.Sleep(1 * time.Second)
-
-	go sendTCPMessage(size)
+	fmt.Println("Server listening on", serverAddress)
 
 	conn, err := ln.Accept()
 	if err != nil {
 		fmt.Println("Failed to accept connection:", err)
-		return err
+		return 0, err
 	}
 	defer conn.Close()
 
-	n, err := readFunc(conn)
+	n, err := rf(conn)
 	fmt.Printf("Server received %d bytes\n", n)
-	if err != nil && err != io.EOF {
-		return err
-	}
-
-	return nil
+	return n, err
 }
 
-func sendTCPMessage(size int) {
-	fmt.Println("Sending message to", internalAddress)
-	conn, err := net.Dial("tcp", internalAddress)
+func sendTCPMessage(wf writeFunc) (int, error) {
+	fmt.Println("Sending message to", serverAddress)
+	conn, err := net.Dial("tcp", serverAddress)
 	if err != nil {
 		fmt.Println("Failed to connect:", err)
-		return
+		return 0, err
 	}
 	defer conn.Close()
 
-	message := strings.Repeat("A", size)
-
-	n, err := conn.Write([]byte(message))
-	if err != nil {
-		fmt.Println("Failed to send message:", err)
-		return
-	}
-	if n != size {
-		fmt.Printf("Failed to send message: sent insufficient size=%d expectedSize=%d\n", n, size)
-		return
-	}
-
-	fmt.Printf("Client finished sending %d bytes\n", size)
+	n, err := wf(conn)
+	fmt.Printf("Client sent %d bytes\n", n)
+	return n, err
 }
