@@ -17,16 +17,16 @@ func main() {
 	go monitorLoop(ctx)
 	time.Sleep(500 * time.Millisecond)
 
-	readerFactory := IdanMadmonDeterministicRateLimitReaderFactory
-	// readerFactory := GolangBurstsRateLimitReaderFactory
+	// readerFactory := IdanMadmonDeterministicRateLimitReaderFactory
+	readerFactory := GolangBurstsRateLimitReaderFactory
 	// readerFactory := JujuBurstsRateLimitReaderFactory
 	// readerFactory := UberDeterministicRateLimitReaderFactory
 	// readerFactory := NoLimitReaderFactory
 
-	// runTest(RateLimitingSyntheticTest, readerFactory)
-	// runTest(RateLimitingRealWorldLocalTest, readerFactory)
+	runTest(RateLimitingSyntheticTest, readerFactory)
 	// runTest(MaxReadOverTimeSyntheticTest, readerFactory)
-	runTest(SpikeRecoveryRealWorldLocalTest, readerFactory)
+	// runTest(RateLimitingRealWorldLocalTest, readerFactory)
+	// runTest(SpikeRecoveryRealWorldLocalTest, readerFactory)
 }
 
 func runTest(testFn BenchmarkTest, factory ReaderFactory) {

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"io"
-	"time"
 
 	idanmadmonReader "github.com/idanmadmon/rate-limited-reader"
 	"github.com/juju/ratelimit"
@@ -22,7 +21,9 @@ func IdanMadmonDeterministicRateLimitReaderFactory(reader io.ReadCloser, bufferS
 }
 
 func GolangBurstsRateLimitReaderFactory(reader io.ReadCloser, bufferSize, limit int) io.ReadCloser {
-	limiter := rate.NewLimiter(rate.Every(time.Second/time.Duration(limit/bufferSize)), 1)
+	// limiter := rate.NewLimiter(rate.Every(time.Second/time.Duration(limit/bufferSize)), 1)
+	// limiter := rate.NewLimiter(rate.Limit(limit/bufferSize), 1)
+	limiter := rate.NewLimiter(rate.Limit(limit/bufferSize), limit/bufferSize)
 	return &GolangRateLimitedReader{
 		reader:  reader,
 		limiter: limiter,
@@ -37,7 +38,10 @@ type GolangRateLimitedReader struct {
 }
 
 func (r *GolangRateLimitedReader) Read(p []byte) (n int, err error) {
-	err = r.limiter.Wait(r.ctx) // wait until tokens are available
+	// fmt.Println("Started", time.Now())
+	// err = r.limiter.Wait(r.ctx) // wait until tokens are available
+	err = r.limiter.WaitN(r.ctx, 700) // wait until tokens are available
+	// fmt.Println("Waited", time.Now())
 	if err != nil {
 		return 0, err
 	}
